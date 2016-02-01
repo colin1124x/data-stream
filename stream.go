@@ -6,18 +6,10 @@ import (
 	"net/http"
 	"os"
 
+	"golang.org/x/net/websocket"
+
 	"log"
-
-	"github.com/joho/godotenv"
 )
-
-func init() {
-	err := godotenv.Load()
-
-	if err != nil {
-		log.Println("Error:", err)
-	}
-}
 
 type Options struct {
 	WebSocket string
@@ -25,9 +17,7 @@ type Options struct {
 	Stdin     string
 }
 
-type Receiver interface {
-	Receive([]byte)
-}
+type Receiver func([]byte)
 
 func Run(opt *Options, r Receiver) error {
 
@@ -38,18 +28,18 @@ func Run(opt *Options, r Receiver) error {
 	for {
 		select {
 		case d := <-stdin:
-			r.Receive(d)
+			r(d)
 		case d := <-ws:
-			r.Receive(d)
+			r(d)
 		case d := <-rest:
-			r.Receive(d)
+			r(d)
 		}
 	}
 }
 
 func handleStdin(enable string) (c chan []byte) {
 
-	if enable != "yes" {
+	if enable != "enable" {
 		return
 	}
 
@@ -96,9 +86,10 @@ func handleREST(addr string) (c chan []byte) {
 	go func() {
 		log.Println("REST listen on", addr)
 		if err := http.ListenAndServe(addr, &RestServer{c}); err != nil {
-			log.Println("Error:", err)
+			log.Println("REST Error:", err)
 		}
 	}()
+
 	return
 }
 
@@ -107,6 +98,30 @@ func handleWebSocket(addr string) (c chan []byte) {
 		return
 	}
 	c = make(chan []byte)
-	log.Println("WebSocket listen on", addr)
+
+	server := &websocket.Server{
+		Handler: func(ws *websocket.Conn) {
+			defer ws.Close()
+
+			websocket.Message.Send(ws, "")
+
+			for {
+				var buf []byte
+				if err := websocket.Message.Receive(ws, &buf); err != nil {
+					log.Println("ws closed")
+					break
+				}
+				c <- buf
+			}
+		},
+	}
+
+	go func() {
+		log.Println("WS listen on", addr)
+		if err := http.ListenAndServe(addr, server); err != nil {
+			log.Println("WS Error:", err)
+		}
+	}()
+
 	return
 }
